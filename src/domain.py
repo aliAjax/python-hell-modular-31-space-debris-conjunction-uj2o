@@ -75,6 +75,9 @@ def normalize_create(payload):
     operators = payload.get("operating_organizations", [])
     if not isinstance(operators, list) or any(not isinstance(item, str) or not item.strip() for item in operators):
         raise DomainError("invalid_operators", "运营方必须是字符串列表")
+    operators = [item.strip() for item in operators]
+    if not operators:
+        raise DomainError("invalid_operators", "协调事件至少需要一个参与运营方")
     stable_key = "%s|%s|%s" % tuple(sorted([primary, secondary]) + [tca])
     return {
         "primary_object_id": primary,

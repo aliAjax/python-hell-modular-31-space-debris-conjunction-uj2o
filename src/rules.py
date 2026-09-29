@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from .domain import DomainError
 
 ENTITY_TYPE = "space_conjunction"
@@ -17,6 +19,9 @@ ENFORCE_REGION = False
 REGION_SENSITIVE_ACTIONS = set()
 ACTION_REQUIRES_VERSION = {"approve", "execute", "resolve", "cancel"}
 
+REVIEW_STATUS = "assessed"
+OPINIONS = ("approve", "reject", "request_review")
+
 
 def assess(payload):
     ratio = float(payload.get("miss_distance_m", 0)) / max(float(payload.get("covariance_m", 1)), 1.0)
@@ -31,6 +36,18 @@ def assess(payload):
     else:
         level = "low"
     return {"score": score, "level": level, "distance_to_covariance_ratio": round(ratio, 3)}
+
+
+def parse_dt(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def latest_opinions(opinions):
+    """同一运营方多次表态时以最后一条为准。"""
+    result = {}
+    for entry in opinions or []:
+        result[entry["operator"]] = entry
+    return result
 
 
 def _need_status(item, allowed):
@@ -79,34 +96,102 @@ def apply_action(item, action, payload, actor, role):
         }
         if revision["covariance_m"] <= 0:
             raise DomainError("invalid_covariance", "协方差必须大于零")
-        current.setdefault("revisions", []).append(revision)
+        observed = parse_dt(revision["observed_at"])
+        current.setdefault("revisions", [])
+        for previous in current["revisions"]:
+            if previous["observed_at"] == revision["observed_at"]:
+                raise DomainError("duplicate_observation", "同一观测时间的修订已经存在", 409)
+
+        applied_at = current.get("latest_observed_at")
+        is_fresher = applied_at is None or observed > parse_dt(applied_at)
+        revision["applied"] = is_fresher
+
+        event_payload = {"revision": revision}
+
+        if not is_fresher:
+            # 晚到的旧观测只进入来源记录，不能覆盖当前距离和风险
+            revision["note"] = "late_observation"
+            current["revisions"].append(revision)
+            event_payload["applied"] = False
+            event_payload["note"] = "晚到的旧观测，仅记录不覆盖当前距离和风险"
+            return status, current, event_payload
+
+        revision["note"] = "applied"
+        current["revisions"].append(revision)
+        current["latest_observed_at"] = revision["observed_at"]
         current["miss_distance_m"] = revision["miss_distance_m"]
         current["covariance_m"] = revision["covariance_m"]
         current["assessment"] = assess(current)
-        return status, current, {"revision": revision}
+
+        invalidated = False
+        if status in {"coordinating", "executing"} and current.get("approved_maneuver"):
+            # 批准后出现更晚的修订：原批准失效，退回待复核
+            stale_maneuver = current.pop("approved_maneuver")
+            current["invalidation"] = {
+                "maneuver": stale_maneuver,
+                "superseded_by": revision["observed_at"],
+                "reason": "更新的轨道修订到达",
+            }
+            invalidated = True
+            status = REVIEW_STATUS
+            event_payload["invalidated_approval"] = stale_maneuver
+
+        # 风险依据已变，运营方需要基于最新数据重新表态
+        if current.get("opinions"):
+            current["opinions"] = []
+            current["conflict"] = False
+            event_payload["opinions_reset"] = True
+
+        event_payload["applied"] = True
+        return status, current, event_payload
 
     if action == "record_opinion":
         _need_status(item, {"assessed", "coordinating"})
         opinion = _require_text(payload, "opinion").lower()
-        if opinion not in {"approve", "reject", "request_review"}:
+        if opinion not in OPINIONS:
             raise DomainError("invalid_opinion", "意见必须是 approve、reject 或 request_review")
         operator = _require_text(payload, "operator")
-        entry = {"operator": operator, "opinion": opinion, "reason": payload.get("reason", "")}
+        organizations = current.get("operating_organizations", [])
+        if operator not in organizations:
+            raise DomainError("unknown_operator", "该运营方不在事件参与方名单中")
+        entry = {
+            "operator": operator,
+            "opinion": opinion,
+            "reason": payload.get("reason", ""),
+            "supersedes": None,
+        }
+        previous = latest_opinions(current.get("opinions", [])).get(operator)
+        if previous is not None:
+            entry["supersedes"] = previous["opinion"]
         current.setdefault("opinions", []).append(entry)
-        if opinion in {"reject", "request_review"}:
-            current["conflict"] = True
-        return status, current, {"opinion": entry}
+        current_opinions = latest_opinions(current["opinions"])
+        current["conflict"] = any(
+            entry["opinion"] in {"reject", "request_review"} for entry in current_opinions.values()
+        )
+        return status, current, {"opinion": entry, "replaced": previous}
 
     if action == "approve":
         _need_status(item, {"assessed"})
         if current.get("conflict"):
             raise DomainError("unresolved_conflict", "存在未解决的运营方冲突意见", 409)
+        organizations = current.get("operating_organizations", [])
+        if not organizations:
+            raise DomainError("operator_consent_required", "事件没有参与运营方，无法协调批准", 409)
+        current_opinions = latest_opinions(current.get("opinions", []))
+        missing = [name for name in organizations if current_opinions.get(name, {}).get("opinion") != "approve"]
+        if missing:
+            raise DomainError(
+                "operator_consent_required",
+                "尚有运营方未同意规避动作：%s" % "、".join(missing),
+                409,
+            )
         fuel = _require_number(payload, "fuel_cost_m_s", 0)
         budget = float(current.get("fuel_budget_m_s", 0))
         if fuel > budget:
             raise DomainError("fuel_budget_exceeded", "规避燃料超过预算", 409)
         window = _require_text(payload, "maneuver_window")
         current["approved_maneuver"] = {"fuel_cost_m_s": fuel, "maneuver_window": window}
+        current.pop("invalidation", None)
         return "coordinating", current, {"approved_maneuver": current["approved_maneuver"]}
 
     if action == "execute":

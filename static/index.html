@@ -1,7 +1,493 @@
 <!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><title>太空碎片接近协调</title>
-<body><h1>太空碎片接近预警与规避协调</h1><p>服务已启动。使用 JSON API 创建接近事件、记录来源、执行评估和协调动作。</p><pre>GET /health
-GET /api/state
-POST /api/items
-POST /api/items/{id}/sources
-POST /api/items/{id}/actions</pre></body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>太空碎片接近协调台</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #131a2e;
+    --panel-2: #1a2340;
+    --line: #263154;
+    --text: #e6ecff;
+    --muted: #8d99c2;
+    --accent: #5b8cff;
+    --ok: #37c26b;
+    --warn: #f5a524;
+    --bad: #f3556a;
+    --chip: #22305a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(1200px 600px at 80% -10%, #16224a 0%, var(--bg) 55%);
+    color: var(--text); font: 14px/1.5 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: rgba(10,15,32,.8);
+    position: sticky; top: 0; z-index: 5; backdrop-filter: blur(6px);
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .identity { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .identity label { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px 22px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .hint { color: var(--muted); font-weight: normal; font-size: 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 7px 9px; font-size: 13px; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 42px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px;
+    font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 400; }
+  button.danger { background: var(--bad); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .item {
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+    cursor: pointer; background: var(--panel-2);
+  }
+  .item:hover { border-color: var(--accent); }
+  .item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .item .line1 { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .item .line2 { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: #b9c8ff; white-space: nowrap; }
+  .badge.pending { background: #3a3a22; color: #ffe08a; }
+  .badge.assessed { background: #2e2a44; color: #c7b3ff; }
+  .badge.coordinating { background: #123b2c; color: #8ff0bb; }
+  .badge.executing { background: #10304c; color: #8fd0ff; }
+  .badge.resolved { background: #143b24; color: #8ce8a8; }
+  .badge.cancelled { background: #3b1620; color: #ffa3b2; }
+  .badge.high { background: #4a1722; color: #ff9daf; }
+  .badge.medium { background: #4a3413; color: #ffd38a; }
+  .badge.low { background: #143b24; color: #8ce8a8; }
+  .badge.ok { background: #143b24; color: #8ce8a8; }
+  .badge.no { background: #4a1722; color: #ff9daf; }
+  .badge.late { background: #4a3413; color: #ffd38a; }
+  .badge.applied { background: #143b24; color: #8ce8a8; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kv .cell { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  .kv .k { color: var(--muted); font-size: 11px; }
+  .kv .v { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .kv .v small { font-size: 11px; color: var(--muted); font-weight: 400; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+  .notice { border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 8px 0; background: #2c2410; border: 1px solid #5b4713; color: #ffd38a; }
+  pre.json { background: #0c1326; border: 1px solid var(--line); border-radius: 8px; padding: 8px; overflow:auto; font-size: 11.5px; margin: 4px 0; color: #a9c0ff; }
+  #toast {
+    position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 50;
+  }
+  .toast { padding: 10px 16px; border-radius: 10px; font-size: 13px; max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  .toast.err { background: #4a1722; border: 1px solid #7c2a3a; }
+  .toast.msg { background: #143b24; border: 1px solid #256b44; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1200px) { .grid2 { grid-template-columns: 1fr; } }
+  .progress { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🛰️ 太空碎片接近协调台</h1>
+    <div class="sub">创建接近事件 · 提交轨道修订 · 记录运营方意见 · 批准与执行规避动作</div>
+  </div>
+  <div class="identity">
+    <label>用户</label><input id="uid" value="analyst-1" style="width:130px">
+    <label>角色</label>
+    <select id="role" style="width:120px">
+      <option value="analyst">analyst 分析员</option>
+      <option value="operator">operator 运营方</option>
+      <option value="coordinator">coordinator 协调员</option>
+    </select>
+    <button class="ghost" id="refresh" type="button">刷新</button>
+  </div>
+</header>
+
+<main>
+  <div>
+    <section class="panel">
+      <h2>创建接近事件 <span class="hint">analyst</span></h2>
+      <form id="create-form">
+        <div class="row">
+          <div><label>我方物体 ID</label><input name="primary_object_id" value="SAT-1" required></div>
+          <div><label>接近物体 ID</label><input name="secondary_object_id" value="DEB-9" required></div>
+        </div>
+        <div class="row">
+          <div><label>最近接近时刻 TCA（UTC）</label><input name="tca" type="datetime-local" step="1" required></div>
+          <div><label>距 TCA（小时，评估用）</label><input name="hours_to_tca" type="number" step="0.1" value="18"></div>
+        </div>
+        <div class="row">
+          <div><label>当前最小距离（米）</label><input name="miss_distance_m" type="number" step="0.01" min="0" value="120"></div>
+          <div><label>协方差（米，&gt;0）</label><input name="covariance_m" type="number" step="0.01" min="0.001" value="100"></div>
+        </div>
+        <div class="row">
+          <div><label>燃料预算（m/s）</label><input name="fuel_budget_m_s" type="number" step="0.01" min="0" value="5"></div>
+          <div><label>轨道数据龄期（小时，≤6 可评估）</label><input name="track_age_hours" type="number" step="0.1" min="0" value="1"></div>
+        </div>
+        <label>参与运营方（逗号分隔，需全部同意才能批准）</label>
+        <input name="operating_organizations" value="Org-A, Org-B">
+        <div class="form-actions"><button type="submit">创建事件</button></div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>事件列表 <span class="hint" id="counts"></span></h2>
+      <div id="item-list"></div>
+    </section>
+  </div>
+
+  <div id="detail-pane"></div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const STATUS_TEXT = {
+  pending: "待评估", assessed: "待复核", coordinating: "已批准·待执行",
+  executing: "执行中", resolved: "已解决", cancelled: "已取消",
+};
+const OPINION_TEXT = { approve: "同意", reject: "反对", request_review: "请求复核" };
+
+const state = { items: [], selectedId: null, detail: null };
+
+function esc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, s =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
+}
+function utcFromInput(v) {
+  // datetime-local 没有时区，统一按 UTC 提交
+  if (!v) return v;
+  return /[zZ]|[+-]\d{2}:?\d{2}$/.test(v) ? v : v + "+00:00";
+}
+function nowLocalInput() {
+  const d = new Date(Date.now() + 1000);
+  d.setSeconds(d.getSeconds() + 60);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function toast(msg, ok = false) {
+  const box = document.getElementById("toast");
+  const el = document.createElement("div");
+  el.className = "toast " + (ok ? "msg" : "err");
+  el.textContent = msg;
+  box.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({
+    "Content-Type": "application/json",
+    "X-User-Id": document.getElementById("uid").value.trim() || "guest",
+    "X-Role": document.getElementById("role").value,
+  }, opts.headers || {});
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function me() {
+  return { id: document.getElementById("uid").value.trim(), role: document.getElementById("role").value };
+}
+
+async function loadItems(keepSelection = true) {
+  const data = await api("/api/items");
+  state.items = data.items || [];
+  const counts = {};
+  state.items.forEach(i => { counts[i.status] = (counts[i.status] || 0) + 1; });
+  document.getElementById("counts").textContent =
+    Object.entries(counts).map(([k, v]) => `${STATUS_TEXT[k] || k} ${v}`).join(" · ");
+  renderList();
+  if (state.selectedId && keepSelection) {
+    if (state.items.some(i => i.id === state.selectedId)) await loadDetail(state.selectedId);
+    else { state.selectedId = null; state.detail = null; renderDetail(); }
+  }
+}
+
+async function loadDetail(id) {
+  state.detail = await api(`/api/items/${id}`);
+  renderDetail();
+}
+
+function renderList() {
+  const box = document.getElementById("item-list");
+  if (!state.items.length) { box.innerHTML = '<div class="empty">暂无事件，先在上方创建。</div>'; return; }
+  box.innerHTML = state.items.map(i => {
+    const p = i.payload || {};
+    return `<div class="item ${i.id === state.selectedId ? "active" : ""}" data-id="${i.id}">
+      <div class="line1">
+        <span class="badge ${i.status}">${STATUS_TEXT[i.status] || i.status}</span>
+        ${esc(p.primary_object_id)} ⇄ ${esc(p.secondary_object_id)}
+      </div>
+      <div class="line2">
+        <span>#${i.id} · v${i.version}</span>
+        <span>TCA ${esc((p.tca || "").replace("+00:00", "Z"))}</span>
+        <span>距离 ${esc(p.miss_distance_m)} m</span>
+        ${p.latest_observed_at ? `<span>最新观测 ${esc(p.latest_observed_at.slice(0, 16).replace("T", " "))}</span>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".item").forEach(el =>
+    el.addEventListener("click", () => { state.selectedId = Number(el.dataset.id); loadDetail(state.selectedId).then(renderList); }));
+}
+
+function latestOpinions(opinions) {
+  const map = new Map();
+  (opinions || []).forEach(o => map.set(o.operator, o));
+  return map;
+}
+
+function opinionBadge(op) {
+  if (!op) return '<span class="badge no">未表态</span>';
+  const cls = op.opinion === "approve" ? "ok" : "no";
+  return `<span class="badge ${cls}">${OPINION_TEXT[op.opinion] || op.opinion}</span>`;
+}
+
+function renderDetail() {
+  const pane = document.getElementById("detail-pane");
+  const d = state.detail;
+  if (!d) { pane.innerHTML = '<section class="panel"><div class="empty">从左侧选择一个事件查看协调详情。</div></section>'; return; }
+  const p = d.payload || {};
+  const a = d.assessment || {};
+  const role = me().role;
+  const orgs = p.operating_organizations || [];
+  const opMap = latestOpinions(p.opinions);
+  const approvedCount = orgs.filter(o => opMap.get(o) && opMap.get(o).opinion === "approve").length;
+  const canApprove = orgs.length > 0 && approvedCount === orgs.length && !p.conflict && d.status === "assessed";
+
+  const actionForms = [];
+  if (role === "analyst" && ["pending", "assessed"].includes(d.status)) {
+    actionForms.push(`<form class="act" data-action="assess">
+      <h3>① 风险评估</h3>
+      <label>距 TCA（小时）</label><input name="hours_to_tca" type="number" step="0.1" value="${esc(p.hours_to_tca ?? 18)}">
+      <div class="form-actions"><button type="submit">执行评估</button></div></form>`);
+  }
+  if (role === "analyst" && ["pending", "assessed", "coordinating", "executing"].includes(d.status)) {
+    actionForms.push(`<form class="act" data-action="report_revision">
+      <h3>② 提交轨道修订</h3>
+      <div class="notice">修订只按<b>观测时间</b>推进：观测时间晚于当前最新值才会覆盖距离与风险；晚到的旧数据只留在修订/来源记录中。批准后到达的更晚修订会使原批准失效并退回待复核。</div>
+      <div class="row">
+        <div><label>观测时间（UTC）</label><input name="observed_at" type="datetime-local" step="1" value="${nowLocalInput()}" required></div>
+        <div><label>数据来源</label><input name="source" value="ground-radar-1" required></div>
+      </div>
+      <div class="row">
+        <div><label>修订后最小距离（米）</label><input name="miss_distance_m" type="number" step="0.01" min="0" required></div>
+        <div><label>协方差（米）</label><input name="covariance_m" type="number" step="0.01" min="0.001" value="${esc(p.covariance_m ?? 100)}" required></div>
+      </div>
+      <div class="form-actions"><button type="submit">提交修订</button></div></form>`);
+  }
+  if (["analyst", "operator"].includes(role) && !["resolved", "cancelled"].includes(d.status)) {
+    actionForms.push(`<form class="act" data-action="__source">
+      <h3>③ 登记原始来源记录（不影响当前距离/风险）</h3>
+      <div class="row">
+        <div><label>来源类型</label><input name="source_type" value="radar" required></div>
+        <div><label>外部记录 ID</label><input name="external_id" value="EXT-${Date.now()}" required></div>
+      </div>
+      <div class="row">
+        <div><label>观测时间（UTC）</label><input name="observed_at" type="datetime-local" step="1" required></div>
+        <div><label>区域（可选）</label><input name="region"></div>
+      </div>
+      <div class="row">
+        <div><label>距离（米）</label><input name="miss_distance_m" type="number" step="0.01" min="0" required></div>
+        <div><label>协方差（米）</label><input name="covariance_m" type="number" step="0.01" min="0.001" required></div>
+      </div>
+      <div class="form-actions"><button type="submit">登记来源</button></div></form>`);
+  }
+  if (role === "operator" && ["assessed", "coordinating"].includes(d.status)) {
+    actionForms.push(`<form class="act" data-action="record_opinion">
+      <h3>④ 运营方意见</h3>
+      <div class="notice">同一运营方再次表态以<b>最新意见</b>为准。所有参与运营方都“同意”后协调员方可批准。</div>
+      <div class="row">
+        <div><label>运营方</label><select name="operator">${orgs.map(o => `<option ${esc(o)}">${esc(o)}</option>`).join("")}</select></div>
+        <div><label>意见</label>
+          <select name="opinion">
+            <option value="approve">同意 approve</option>
+            <option value="reject">反对 reject</option>
+            <option value="request_review">请求复核 request_review</option>
+          </select></div>
+      </div>
+      <label>理由</label><textarea name="reason"></textarea>
+      <div class="form-actions"><button type="submit">提交意见</button></div></form>`);
+  }
+  if (role === "coordinator" && d.status === "assessed") {
+    actionForms.push(`<form class="act" data-action="approve" data-version="1">
+      <h3>⑤ 协调员批准规避机动</h3>
+      <div class="progress">同意进度：${approvedCount}/${orgs.length}${p.conflict ? " · 存在反对/复核意见" : ""}</div>
+      <div class="row">
+        <div><label>燃料消耗（m/s，预算 ${esc(p.fuel_budget_m_s)}）</label><input name="fuel_cost_m_s" type="number" step="0.01" min="0" value="1" required></div>
+        <div><label>机动窗口</label><input name="maneuver_window" placeholder="ISO 时间区间" value="${esc((p.tca || "").replace("+00:00", "Z"))}/..." required></div>
+      </div>
+      <div class="form-actions"><button type="submit" ${canApprove ? "" : "disabled"}>${canApprove ? "批准" : "需全体运营方同意"}</button></div></form>`);
+  }
+  if (role === "operator" && d.status === "coordinating") {
+    actionForms.push(`<form class="act" data-action="execute" data-version="1">
+      <h3>⑥ 执行规避机动</h3>
+      <label>指令编号</label><input name="command_ref" value="CMD-${Date.now()}" required>
+      <div class="form-actions"><button type="submit">下发执行</button></div></form>`);
+  }
+  if (role === "coordinator" && d.status === "executing") {
+    actionForms.push(`<form class="act" data-action="resolve" data-version="1">
+      <h3>⑦ 上报结果并解决</h3>
+      <label>结果报告编号</label><input name="report_ref" value="RPT-${Date.now()}" required>
+      <div class="form-actions"><button type="submit">标记已解决</button></div></form>`);
+  }
+  if (role === "coordinator" && ["pending", "assessed"].includes(d.status)) {
+    actionForms.push(`<form class="act" data-action="cancel" data-version="1">
+      <h3>取消事件</h3>
+      <label>原因</label><input name="reason" required>
+      <div class="form-actions"><button class="danger" type="submit">取消</button></div></form>`);
+  }
+
+  const revisions = (p.revisions || []).map(r => `<tr>
+      <td>${esc(r.observed_at)}</td>
+      <td>${esc(r.miss_distance_m)} m</td>
+      <td>${esc(r.covariance_m)} m</td>
+      <td>${esc(r.source)}</td>
+      <td>${r.applied ? '<span class="badge applied">已采纳·推进当前值</span>' : '<span class="badge late">晚到留痕·未覆盖</span>'}</td>
+    </tr>`).join("");
+
+  const sources = (d.sources || []).map(s => `<tr>
+      <td>${esc(s.source_type)}</td><td>${esc(s.external_id)}</td>
+      <td>${esc(s.observed_at)}</td>
+      <td>${esc(s.payload.miss_distance_m)} m / ${esc(s.payload.covariance_m)} m</td>
+    </tr>`).join("");
+
+  const opRows = orgs.map(o => {
+    const op = opMap.get(o);
+    return `<tr><td>${esc(o)}</td><td>${opinionBadge(op)}</td>
+      <td>${op ? esc(op.reason || "—") : "—"}</td></tr>`;
+  }).join("");
+
+  const opHistory = (p.opinions || []).map(o => `<tr>
+      <td>${esc(o.operator)}</td><td>${OPINION_TEXT[o.opinion] || esc(o.opinion)}</td>
+      <td>${esc(o.reason || "")}</td><td>${o.supersedes ? "覆盖此前：" + OPINION_TEXT[o.supersedes] : "首次"}</td></tr>`).join("");
+
+  const audit = (d.audit || []).slice().reverse().map(e => `<tr>
+      <td>${esc(e.event_type)}</td><td>${esc(e.actor)} (${esc(e.role)})</td>
+      <td>${esc((e.created_at || "").slice(0, 19).replace("T", " "))}</td>
+      <td><pre class="json">${esc(JSON.stringify(e.payload))}</pre></td></tr>`).join("");
+
+  pane.innerHTML = `
+    <section class="panel">
+      <h2><span class="badge ${d.status}">${STATUS_TEXT[d.status] || d.status}</span>
+        事件 #${d.id} · ${esc(p.primary_object_id)} ⇄ ${esc(p.secondary_object_id)}
+        <span class="hint">v${d.version}</span></h2>
+      <div class="kv">
+        <div class="cell"><div class="k">当前最小距离</div><div class="v">${esc(p.miss_distance_m)} <small>m</small></div></div>
+        <div class="cell"><div class="k">风险评分 / 等级</div>
+          <div class="v">${esc(a.score)} <span class="badge ${esc(a.level)}">${({high:"高",medium:"中",low:"低"})[a.level] || ""}</span></div></div>
+        <div class="cell"><div class="k">距离/协方差比</div><div class="v">${esc(a.distance_to_covariance_ratio)}</div></div>
+        <div class="cell"><div class="k">TCA</div><div class="v" style="font-size:13px">${esc((p.tca || "").replace("+00:00", "Z"))}</div></div>
+        <div class="cell"><div class="k">当前依据观测时间</div><div class="v" style="font-size:13px">${esc((p.latest_observed_at || "初始轨道数据"))}</div></div>
+        <div class="cell"><div class="k">燃料预算</div><div class="v">${esc(p.fuel_budget_m_s)} <small>m/s</small></div></div>
+      </div>
+      ${p.approved_maneuver ? `<div class="notice">已批准机动：${esc(p.approved_maneuver.maneuver_window)} · ${esc(p.approved_maneuver.fuel_cost_m_s)} m/s</div>` : ""}
+      ${p.invalidation ? `<div class="notice">⚠ 原批准已被观测时间 ${esc(p.invalidation.superseded_by)} 的修订取代，事件退回待复核，运营方需重新表态。</div>` : ""}
+      ${p.command_ref ? `<div class="notice">执行指令：${esc(p.command_ref)}</div>` : ""}
+      ${p.resolution ? `<div class="notice">结果报告：${esc(p.resolution.report_ref)}（${esc(p.resolution.resolved_by)}）</div>` : ""}
+      ${p.cancellation ? `<div class="notice">已取消：${esc(p.cancellation.reason)}（${esc(p.cancellation.cancelled_by)}）</div>` : ""}
+    </section>
+
+    <section class="panel"><h2>运营方意见 <span class="hint">同一运营方以最新意见为准 · ${approvedCount}/${orgs.length} 同意</span></h2>
+      <table><thead><tr><th>运营方</th><th>最新意见</th><th>理由</th></tr></thead><tbody>${opRows || '<tr><td colspan=3 class=empty>暂无</td></tr>'}</tbody></table>
+      <h3 style="margin-top:14px">表态历史</h3>
+      <table><thead><tr><th>运营方</th><th>意见</th><th>理由</th><th>说明</th></tr></thead><tbody>${opHistory || '<tr><td colspan=4 class=empty>暂无</td></tr>'}</tbody></table>
+    </section>
+
+    <section class="panel"><h2>协调操作 <span class="hint">当前身份：${esc(me().id)} / ${esc(role)}</span></h2>
+      ${actionForms.join("") || '<div class="empty">当前角色/状态下没有可执行的操作。</div>'}
+    </section>
+
+    <div class="grid2">
+      <section class="panel"><h2>轨道修订记录 <span class="hint">按观测时间推进</span></h2>
+        <table><thead><tr><th>观测时间</th><th>距离</th><th>协方差</th><th>来源</th><th>状态</th></tr></thead>
+        <tbody>${revisions || '<tr><td colspan=5 class=empty>暂无修订</td></tr>'}</tbody></table>
+      </section>
+      <section class="panel"><h2>原始来源记录 <span class="hint">晚到数据仅留存于此</span></h2>
+        <table><thead><tr><th>类型</th><th>外部 ID</th><th>观测时间</th><th>距离/协方差</th></tr></thead>
+        <tbody>${sources || '<tr><td colspan=4 class=empty>暂无来源</td></tr>'}</tbody></table>
+      </section>
+    </div>
+
+    <section class="panel"><h2>审计链</h2>
+      <table><thead><tr><th>事件</th><th>操作人</th><th>时间(UTC)</th><th>内容</th></tr></thead>
+      <tbody>${audit || '<tr><td colspan=4 class=empty>暂无</td></tr>'}</tbody></table>
+    </section>`;
+
+  pane.querySelectorAll("form.act").forEach(form =>
+    form.addEventListener("submit", onActionSubmit));
+}
+
+async function onActionSubmit(ev) {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const action = form.dataset.action;
+  const body = {};
+  new FormData(form).forEach((v, k) => { body[k] = v; });
+
+  try {
+    if (action === "__source") {
+      body.observed_at = utcFromInput(body.observed_at);
+      await api(`/api/items/${state.selectedId}/sources`, { method: "POST", body: JSON.stringify(body) });
+      toast("来源记录已登记（不影响当前距离与风险）", true);
+    } else {
+      body.action = action;
+      if (form.dataset.version) body.expected_version = state.detail.version;
+      if (action === "report_revision") body.observed_at = utcFromInput(body.observed_at);
+      await api(`/api/items/${state.selectedId}/actions`, { method: "POST", body: JSON.stringify(body) });
+      toast(`操作 ${action} 成功`, true);
+    }
+    await loadItems();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+document.getElementById("create-form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const body = {};
+  new FormData(form).forEach((v, k) => { body[k] = v; });
+  body.tca = utcFromInput(body.tca);
+  body.operating_organizations = String(body.operating_organizations || "").split(",").map(s => s.trim()).filter(Boolean);
+  ["miss_distance_m", "covariance_m", "fuel_budget_m_s", "track_age_hours"].forEach(k => body[k] = Number(body[k]));
+  try {
+    const created = await api("/api/items", { method: "POST", body: JSON.stringify(body) });
+    state.selectedId = created.id;
+    toast(`事件 #${created.id} 已创建`, true);
+    form.reset();
+    await loadItems(false);
+    await loadDetail(created.id);
+    renderList();
+  } catch (e) { toast(e.message); }
+});
+
+document.getElementById("refresh").addEventListener("click", () => loadItems().catch(e => toast(e.message)));
+document.getElementById("role").addEventListener("change", () => { if (state.detail) renderDetail(); });
+document.getElementById("uid").addEventListener("change", () => { if (state.detail) renderDetail(); });
+
+(async function init() {
+  // 默认 TCA 预填为明天 UTC
+  const d = new Date(Date.now() + 24 * 3600 * 1000);
+  const p = n => String(n).padStart(2, "0");
+  document.querySelector('#create-form input[name=tca]').value =
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  try { await loadItems(false); } catch (e) { toast(e.message); }
+  setInterval(() => loadItems().catch(() => {}), 10000);
+})();
+</script>
+</body>
+</html>
