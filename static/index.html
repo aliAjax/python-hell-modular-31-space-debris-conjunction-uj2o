@@ -1,7 +1,764 @@
 <!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><title>太空碎片接近协调</title>
-<body><h1>太空碎片接近预警与规避协调</h1><p>服务已启动。使用 JSON API 创建接近事件、记录来源、执行评估和协调动作。</p><pre>GET /health
-GET /api/state
-POST /api/items
-POST /api/items/{id}/sources
-POST /api/items/{id}/actions</pre></body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>太空碎片接近协调台</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #181f2e;
+    --panel-2: #1f2839;
+    --border: #2b3650;
+    --text: #e6ebf5;
+    --muted: #8b97ad;
+    --accent: #4f8cff;
+    --ok: #2fbf71;
+    --warn: #e8a33d;
+    --danger: #e5484d;
+    --chip: #28334a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .identity { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .identity input, .identity select {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px;
+  }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px 20px; align-items: start; }
+  @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  .panel h3 { font-size: 13px; margin: 14px 0 8px; color: var(--muted); text-transform: none; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 48px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  button.secondary { background: var(--chip); color: var(--text); }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-block { width: 100%; margin-top: 10px; }
+  .event {
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px;
+    cursor: pointer; background: var(--panel-2);
+  }
+  .event:hover { border-color: var(--accent); }
+  .event.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .event .title { font-weight: 600; font-size: 13px; }
+  .event .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+    background: var(--chip); color: var(--text); white-space: nowrap;
+  }
+  .badge.high, .badge.executing, .badge.coordinating, .badge.danger { background: rgba(229,72,77,.18); color: #ff8f92; }
+  .badge.medium, .badge.assessed, .badge.warn { background: rgba(232,163,61,.18); color: #f2c068; }
+  .badge.low, .badge.resolved, .badge.ok { background: rgba(47,191,113,.18); color: #63d99a; }
+  .badge.pending, .badge.cancelled { background: var(--chip); color: var(--muted); }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  tr.approved-row td { color: var(--muted); }
+  tr.approved-row .strike { text-decoration: line-through; }
+  .muted { color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .banner {
+    border: 1px solid var(--warn); background: rgba(232,163,61,.12); color: #f2c068;
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  .actions-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  #toast { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+  .toast {
+    background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 10px 14px; max-width: 380px; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  }
+  .toast.error { border-left-color: var(--danger); }
+  .toast.ok { border-left-color: var(--ok); }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; text-align: center; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .risk-num { font-size: 22px; font-weight: 700; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🛰️ 太空碎片接近协调台</h1>
+    <div class="sub">接近事件 · 轨道修订 · 运营方意见 · 批准与执行</div>
+  </div>
+  <div class="identity">
+    <span class="muted">当前身份</span>
+    <input id="userId" placeholder="用户 ID" style="width:130px">
+    <select id="role" style="width:120px">
+      <option value="analyst">分析员</option>
+      <option value="coordinator">协调员</option>
+      <option value="operator">运营方</option>
+    </select>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="panel">
+      <h2>新建接近事件 <span class="muted" style="font-weight:400">（分析员）</span></h2>
+      <form id="createForm">
+        <div class="row">
+          <div><label>我方物体 ID</label><input name="primary_object_id" required placeholder="SAT-1"></div>
+          <div><label>接近物体 ID</label><input name="secondary_object_id" required placeholder="DEB-9"></div>
+        </div>
+        <label>最近接近时刻 TCA（UTC）</label>
+        <input name="tca" type="datetime-local" step="1" required>
+        <div class="row">
+          <div><label>当前最近距离 (m)</label><input name="miss_distance_m" type="number" step="any" value="120" min="0" required></div>
+          <div><label>协方差 (m)</label><input name="covariance_m" type="number" step="any" value="100" min="0.001" required></div>
+        </div>
+        <div class="row">
+          <div><label>燃料预算 (m/s)</label><input name="fuel_budget_m_s" type="number" step="any" value="5" min="0"></div>
+          <div><label>轨道数据龄期 (h)</label><input name="track_age_hours" type="number" step="any" value="1" min="0"></div>
+        </div>
+        <label>参与运营方（逗号分隔，至少一个）</label>
+        <input name="operating_organizations" placeholder="Org-A, Org-B" required>
+        <button class="btn-block" type="submit">创建事件</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <div class="actions-inline" style="justify-content:space-between">
+        <h2 style="margin:0">事件列表</h2>
+        <button class="secondary" id="refreshBtn" type="button">刷新</button>
+      </div>
+      <div id="eventList"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <div class="detail" id="detail">
+    <div class="panel"><div class="empty">请从左侧选择一个接近事件</div></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+const STATUS_LABELS = {
+  pending: "待评估",
+  assessed: "已评估",
+  coordinating: "已批准 · 协调中",
+  executing: "执行中",
+  resolved: "已解决",
+  cancelled: "已取消",
+};
+const OPINION_LABELS = { approve: "同意", reject: "拒绝", request_review: "请求复核" };
+const OPINION_CLASS = { approve: "ok", reject: "danger", request_review: "warn" };
+
+const state = {
+  items: [],
+  selectedId: null,
+  detail: null,
+};
+
+// ---------- 工具 ----------
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v;
+      else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+      else if (v !== null && v !== undefined) node.setAttribute(k, v);
+    }
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || typeof child === "boolean") continue;
+    node.appendChild(typeof child === "string" || typeof child === "number" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+function toast(message, kind) {
+  const node = el("div", { class: "toast " + (kind || "") }, message);
+  document.getElementById("toast").appendChild(node);
+  setTimeout(() => node.remove(), 4200);
+}
+
+function fmt(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+function fmtNum(value, digits) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(digits === undefined ? 2 : digits) : "—";
+}
+function localToIso(value) {
+  // datetime-local 按浏览器本地时区解释，转成 UTC ISO 串。
+  return value ? new Date(value).toISOString() : "";
+}
+function isoToInput(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d)) return value;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function nowInput() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+// ---------- 身份 ----------
+function identity() {
+  return {
+    id: document.getElementById("userId").value.trim(),
+    role: document.getElementById("role").value,
+  };
+}
+function saveIdentity() {
+  localStorage.setItem("coordUser", document.getElementById("userId").value.trim());
+  localStorage.setItem("coordRole", document.getElementById("role").value);
+}
+function loadIdentity() {
+  document.getElementById("userId").value = localStorage.getItem("coordUser") || "analyst-1";
+  document.getElementById("role").value = localStorage.getItem("coordRole") || "analyst";
+}
+
+// ---------- API ----------
+async function api(method, path, body) {
+  const who = identity();
+  const opts = {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "X-User-Id": who.id,
+      "X-Role": who.role,
+    },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* ignore */ }
+  if (!resp.ok) {
+    const err = new Error((data && data.message) || ("请求失败 (" + resp.status + ")"));
+    err.code = data && data.error;
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+async function act(itemId, action, payload, expectedVersion) {
+  const body = Object.assign({ action }, payload);
+  if (expectedVersion !== undefined) body.expected_version = expectedVersion;
+  return api("POST", `/api/items/${itemId}/actions`, body);
+}
+
+// ---------- 事件列表 ----------
+async function loadItems(silent) {
+  const data = await api("GET", "/api/items");
+  state.items = data.items || [];
+  renderList();
+  if (state.selectedId) {
+    await loadDetail(state.selectedId, silent);
+  }
+}
+
+function renderList() {
+  const box = document.getElementById("eventList");
+  box.textContent = "";
+  if (!state.items.length) {
+    box.appendChild(el("div", { class: "empty" }, "暂无事件"));
+    return;
+  }
+  for (const item of state.items) {
+    const p = item.payload || {};
+    const level = (p.assessment && p.assessment.level) || "pending";
+    const statusBadge = el("span", { class: "badge " + item.status }, STATUS_LABELS[item.status] || item.status);
+    const riskBadge = el("span", { class: "badge " + level },
+      p.assessment ? `风险 ${p.assessment.level} · ${p.assessment.score}` : "未评估");
+    box.appendChild(el("div", {
+      class: "event" + (state.selectedId === item.id ? " active" : ""),
+      onclick: () => selectEvent(item.id),
+    },
+      el("div", { class: "title" }, `#${item.id}　${p.primary_object_id} × ${p.secondary_object_id}`),
+      el("div", { class: "meta actions-inline" }, statusBadge, riskBadge),
+      el("div", { class: "meta" }, "TCA " + fmt(p.tca) + ` · 距离 ${fmtNum(p.miss_distance_m, 1)} m`),
+    ));
+  }
+}
+
+async function selectEvent(id) {
+  state.selectedId = id;
+  renderList();
+  await loadDetail(id);
+}
+
+// ---------- 详情 ----------
+async function loadDetail(id, silent) {
+  try {
+    const detail = await api("GET", `/api/items/${id}`);
+    const unchanged = silent && state.detail && detail.version === state.detail.version;
+    state.detail = detail;
+    if (!unchanged) renderDetail();
+  } catch (err) {
+    if (!silent) toast(err.message, "error");
+    state.detail = null;
+  }
+}
+
+function renderDetail() {
+  const item = state.detail;
+  const root = document.getElementById("detail");
+  root.textContent = "";
+  if (!item) return;
+  const p = item.payload;
+  const assessment = item.assessment || p.assessment;
+  const role = identity().role;
+
+  // 头部
+  const head = el("div", { class: "panel" });
+  head.appendChild(el("div", { class: "actions-inline", style: "justify-content:space-between" },
+    el("h2", { style: "margin:0;font-size:16px" },
+      `事件 #${item.id}：${p.primary_object_id} × ${p.secondary_object_id}`),
+    el("div", { class: "actions-inline" },
+      el("span", { class: "badge " + item.status }, STATUS_LABELS[item.status] || item.status),
+      el("span", { class: "muted" }, "v" + item.version),
+    ),
+  ));
+  if (p.approval_invalidated) {
+    head.appendChild(el("div", { class: "banner", style: "margin-top:10px" },
+      `⚠ 原批准已因更晚的轨道修订（${p.approval_invalidated.source}，观测于 ${p.approval_invalidated.observed_at}）失效，事件已退回待复核，需要运营方重新表态后由协调员批准。`));
+  }
+  head.appendChild(el("div", { class: "grid2", style: "margin-top:12px" },
+    el("div", { class: "kv" },
+      el("span", { class: "k" }, "TCA"), el("span", null, fmt(p.tca)),
+      el("span", { class: "k" }, "当前最近距离"), el("span", null, fmtNum(p.miss_distance_m, 2) + " m"),
+      el("span", { class: "k" }, "当前协方差"), el("span", null, fmtNum(p.covariance_m, 2) + " m"),
+      el("span", { class: "k" }, "最新观测时间"), el("span", null, fmt(p.latest_observed_at) + (p.latest_observed_at ? "（修订前以 TCA 初始数据为准）" : "")),
+      el("span", { class: "k" }, "数据龄期"), el("span", null, fmtNum(p.track_age_hours, 1) + " 小时"),
+    ),
+    el("div", { class: "kv" },
+      el("span", { class: "k" }, "风险评分"),
+      el("span", { class: "risk-num" }, assessment ? fmtNum(assessment.score, 1) : "—"),
+      el("span", { class: "k" }, "风险等级"),
+      el("span", null, assessment ? el("span", { class: "badge " + assessment.level }, assessment.level) : "未评估"),
+      el("span", { class: "k" }, "距/协方差比"), el("span", null, assessment ? fmtNum(assessment.distance_to_covariance_ratio, 3) : "—"),
+      el("span", { class: "k" }, "燃料预算"), el("span", null, fmtNum(p.fuel_budget_m_s, 2) + " m/s"),
+      el("span", { class: "k" }, "参与运营方"), el("span", null, (p.operating_organizations || []).join("、")),
+    ),
+  ));
+  if (p.approved_maneuver) {
+    head.appendChild(el("p", { class: "hint" },
+      `已批准机动：燃料 ${fmtNum(p.approved_maneuver.fuel_cost_m_s, 2)} m/s；窗口 ${p.approved_maneuver.maneuver_window}`));
+  }
+  if (p.command_ref) head.appendChild(el("p", { class: "hint" }, "执行指令参考：" + p.command_ref));
+  if (p.resolution) head.appendChild(el("p", { class: "hint" }, `已解决：报告 ${p.resolution.report_ref}（${p.resolution.resolved_by}）`));
+  if (p.cancellation) head.appendChild(el("p", { class: "hint" }, `已取消：${p.cancellation.reason}（${p.cancellation.cancelled_by}）`));
+  root.appendChild(head);
+
+  // 工作区：评估中 / 已评估 / 协调中 / 执行中 才显示操作面板
+  const actionable = ["pending", "assessed", "coordinating", "executing"].includes(item.status);
+  if (actionable) {
+    const grid = el("div", { class: "grid2" });
+    grid.appendChild(buildAssessmentPanel(item, role));
+    grid.appendChild(buildRevisionPanel(item, role));
+    grid.appendChild(buildOpinionPanel(item, role));
+    grid.appendChild(buildApprovePanel(item, p, role));
+    grid.appendChild(buildExecutePanel(item, p, role));
+    grid.appendChild(buildSourcePanel(item, role));
+    grid.appendChild(buildClosePanel(item, role));
+    root.appendChild(grid);
+  }
+
+  root.appendChild(buildLedgerPanel(item));
+  root.appendChild(buildAuditPanel(item));
+}
+
+// 通用：绑定表单并提交 action
+function formPanel(title, fieldsNode, onSubmit) {
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, title));
+  const form = el("form");
+  fieldsNode(form);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      await onSubmit(new FormData(form));
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
+  panel.appendChild(form);
+  return panel;
+}
+
+function buildAssessmentPanel(item, role) {
+  if (role !== "analyst") return el("div", { class: "panel" }, el("h2", null, "风险评估"), el("p", { class: "hint" }, "仅分析员可执行评估"));
+  if (!["pending", "assessed"].includes(item.status)) {
+    return el("div", { class: "panel" }, el("h2", null, "风险评估"), el("p", { class: "hint" }, "当前状态无需重新评估"));
+  }
+  const p = item.payload;
+  return formPanel("风险评估（分析员）", (form) => {
+    form.appendChild(el("label", null, "距 TCA 小时数"));
+    const input = el("input", { name: "hours_to_tca", type: "number", step: "any", min: "0",
+      value: p.hours_to_tca !== undefined ? p.hours_to_tca : "18" });
+    form.appendChild(input);
+    if (Number(p.track_age_hours) > 6) {
+      form.appendChild(el("p", { class: "hint", style: "color:var(--danger)" }, "轨道数据龄期超过 6 小时，评估将被拒绝，请先提交更新的轨道修订。"));
+    }
+    form.appendChild(el("button", { class: "btn-block", type: "submit" }, "执行评估"));
+  }, async (data) => {
+    await act(item.id, "assess", { hours_to_tca: Number(data.get("hours_to_tca")) }, item.version);
+    toast("评估完成", "ok");
+    await loadItems();
+  });
+}
+
+function buildRevisionPanel(item, role) {
+  if (role !== "analyst") return el("div");
+  if (!["pending", "assessed", "coordinating", "executing"].includes(item.status)) return el("div");
+  return formPanel("提交轨道修订（分析员）", (form) => {
+    form.appendChild(el("p", { class: "hint" },
+      "修订严格按观测时间推进：晚于当前最新观测才会更新距离与风险；晚到的旧数据只进入来源台账。若事件已批准，更晚的修订将使原批准失效并退回待复核。"));
+    form.appendChild(el("label", null, "观测时间（UTC）"));
+    form.appendChild(el("input", { name: "observed_at", type: "datetime-local", step: "1", value: nowInput(), required: "" }));
+    form.appendChild(el("div", { class: "row" },
+      (() => { const w = el("div"); w.appendChild(el("label", null, "最近距离 (m)")); w.appendChild(el("input", { name: "miss_distance_m", type: "number", step: "any", min: "0", required: "" })); return w; })(),
+      (() => { const w = el("div"); w.appendChild(el("label", null, "协方差 (m)")); w.appendChild(el("input", { name: "covariance_m", type: "number", step: "any", min: "0.001", required: "" })); return w; })(),
+    ));
+    form.appendChild(el("label", null, "数据来源"));
+    form.appendChild(el("input", { name: "source", required: "", placeholder: "tracking-station-3" }));
+    form.appendChild(el("button", { class: "btn-block", type: "submit" }, "提交修订"));
+  }, async (data, form) => {
+    const result = await act(item.id, "report_revision", {
+      observed_at: localToIso(data.get("observed_at")),
+      miss_distance_m: Number(data.get("miss_distance_m")),
+      covariance_m: Number(data.get("covariance_m")),
+      source: data.get("source"),
+    }, item.version);
+    if (result.payload.approval_invalidated) toast("已提交更晚修订，原批准失效，事件退回待复核", "error");
+    else toast("轨道修订已提交", "ok");
+    await loadItems();
+  });
+}
+
+function buildOpinionPanel(item, p, role) {
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, "运营方意见"));
+
+  // 每位运营方的最新意见
+  const latest = {};
+  for (const entry of p.opinions || []) latest[entry.operator] = entry;
+  const table = el("table");
+  table.appendChild(el("thead", null, el("tr", null,
+    el("th", null, "运营方"), el("th", null, "最新意见"), el("th", null, "理由"))));
+  const tbody = el("tbody");
+  for (const name of p.operating_organizations || []) {
+    const entry = latest[name];
+    tbody.appendChild(el("tr", null,
+      el("td", null, name),
+      el("td", null, entry
+        ? el("span", { class: "badge " + OPINION_CLASS[entry.opinion] }, OPINION_LABELS[entry.opinion])
+        : el("span", { class: "muted" }, "未表态")),
+      el("td", null, entry && entry.reason ? entry.reason : el("span", { class: "muted" }, "—")),
+    ));
+  }
+  table.appendChild(tbody);
+  panel.appendChild(table);
+
+  if (role === "operator" && item.status === "assessed") {
+    const form = el("form", { style: "margin-top:10px" });
+    form.appendChild(el("label", null, "代表运营方"));
+    const select = el("select", { name: "operator" });
+    for (const name of p.operating_organizations || []) select.appendChild(el("option", { value: name }, name));
+    form.appendChild(select);
+    form.appendChild(el("label", null, "意见（同一运营方再次表态以最新为准）"));
+    const opSelect = el("select", { name: "opinion" });
+    opSelect.appendChild(el("option", { value: "approve" }, "同意"));
+    opSelect.appendChild(el("option", { value: "request_review" }, "请求复核"));
+    opSelect.appendChild(el("option", { value: "reject" }, "拒绝"));
+    form.appendChild(opSelect);
+    form.appendChild(el("label", null, "理由"));
+    form.appendChild(el("textarea", { name: "reason", placeholder: "可选" }));
+    form.appendChild(el("button", { class: "btn-block", type: "submit" }, "提交意见"));
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const data = new FormData(form);
+      try {
+        await act(item.id, "record_opinion", {
+          operator: data.get("operator"),
+          opinion: data.get("opinion"),
+          reason: data.get("reason"),
+        }, item.version);
+        toast("意见已记录", "ok");
+        await loadItems();
+      } catch (err) { toast(err.message, "error"); }
+    });
+    panel.appendChild(form);
+  } else if (item.status !== "assessed") {
+    panel.appendChild(el("p", { class: "hint" }, "仅在待协调（已评估/待复核）状态可以记录意见。"));
+  } else {
+    panel.appendChild(el("p", { class: "hint" }, "当前身份不是运营方。"));
+  }
+  return panel;
+}
+
+function buildApprovePanel(item, p, role) {
+  if (role !== "coordinator") return el("div");
+  if (item.status !== "assessed") return el("div");
+
+  const latest = {};
+  for (const entry of p.opinions || []) latest[entry.operator] = entry.opinion;
+  const missing = (p.operating_organizations || []).filter((n) => latest[n] !== "approve");
+
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, "协调员批准"));
+  if (missing.length) {
+    panel.appendChild(el("p", { class: "hint", style: "color:var(--warn)" },
+      "尚不能批准，以下运营方未明确同意：" + missing.join("、") + "。必须所有运营方一致同意。"));
+  } else {
+    panel.appendChild(el("p", { class: "hint", style: "color:var(--ok)" }, "所有运营方均已同意，可以批准规避机动。"));
+  }
+  const form = el("form");
+  form.appendChild(el("div", { class: "row" },
+    (() => { const w = el("div"); w.appendChild(el("label", null, "燃料消耗 (m/s)")); w.appendChild(el("input", { name: "fuel_cost_m_s", type: "number", step: "any", min: "0", required: "" })); return w; })(),
+    (() => { const w = el("div"); w.appendChild(el("label", null, "机动窗口")); w.appendChild(el("input", { name: "maneuver_window", required: "", placeholder: "2026-10-01T08:00Z/09:00Z" })); return w; })(),
+  ));
+  const btn = el("button", { class: "btn-block", type: "submit" }, "批准规避机动");
+  if (missing.length) btn.disabled = true;
+  form.appendChild(btn);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const data = new FormData(form);
+    try {
+      await act(item.id, "approve", {
+        fuel_cost_m_s: Number(data.get("fuel_cost_m_s")),
+        maneuver_window: data.get("maneuver_window"),
+      }, item.version);
+      toast("已批准", "ok");
+      await loadItems();
+    } catch (err) { toast(err.message, "error"); }
+  });
+  panel.appendChild(form);
+  return panel;
+}
+
+function buildExecutePanel(item, p, role) {
+  if (role !== "operator") return el("div");
+  if (item.status !== "coordinating") return el("div");
+  return formPanel("执行机动（运营方）", (form) => {
+    form.appendChild(el("label", null, "指令参考号"));
+    form.appendChild(el("input", { name: "command_ref", required: "", placeholder: "CMD-7" }));
+    form.appendChild(el("button", { class: "btn-block", type: "submit" }, "确认执行"));
+  }, async (data) => {
+    await act(item.id, "execute", { command_ref: data.get("command_ref") }, item.version);
+    toast("机动执行已记录", "ok");
+    await loadItems();
+  });
+}
+
+function buildSourcePanel(item, role) {
+  if (role !== "analyst" && role !== "operator") return el("div");
+  return formPanel("来源观测记录", (form) => {
+    form.appendChild(el("p", { class: "hint" }, "原始来源数据独立留档（可重复提交晚到观测），不直接改变当前距离与风险。"));
+    form.appendChild(el("div", { class: "row" },
+      (() => { const w = el("div"); w.appendChild(el("label", null, "来源类型")); w.appendChild(el("input", { name: "source_type", required: "", placeholder: "radar" })); return w; })(),
+      (() => { const w = el("div"); w.appendChild(el("label", null, "外部记录 ID")); w.appendChild(el("input", { name: "external_id", required: "", placeholder: "OBS-20260930-01" })); return w; })(),
+    ));
+    form.appendChild(el("label", null, "观测时间（UTC）"));
+    form.appendChild(el("input", { name: "observed_at", type: "datetime-local", step: "1", value: nowInput(), required: "" }));
+    form.appendChild(el("div", { class: "row" },
+      (() => { const w = el("div"); w.appendChild(el("label", null, "最近距离 (m)")); w.appendChild(el("input", { name: "miss_distance_m", type: "number", step: "any", min: "0", required: "" })); return w; })(),
+      (() => { const w = el("div"); w.appendChild(el("label", null, "协方差 (m)")); w.appendChild(el("input", { name: "covariance_m", type: "number", step: "any", min: "0.001", required: "" })); return w; })(),
+    ));
+    form.appendChild(el("button", { class: "btn-block secondary", type: "submit" }, "记录来源数据"));
+  }, async (data) => {
+    await api("POST", `/api/items/${item.id}/sources`, {
+      source_type: data.get("source_type"),
+      external_id: data.get("external_id"),
+      observed_at: localToIso(data.get("observed_at")),
+      miss_distance_m: Number(data.get("miss_distance_m")),
+      covariance_m: Number(data.get("covariance_m")),
+    });
+    toast("来源记录已存档", "ok");
+    await loadItems();
+  });
+}
+
+function buildClosePanel(item, role) {
+  if (role !== "coordinator") return el("div");
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, "协调员收尾"));
+
+  if (item.status === "executing") {
+    panel.appendChild(formNode("报告参考号", "report_ref", "RPT-7", "登记解决结果", async (data) => {
+      await act(item.id, "resolve", { report_ref: data.get("report_ref") }, item.version);
+      toast("事件已解决", "ok");
+      await loadItems();
+    }));
+  }
+  if (item.status === "pending" || item.status === "assessed") {
+    panel.appendChild(formNode("取消原因", "reason", "", "取消事件", async (data) => {
+      await act(item.id, "cancel", { reason: data.get("reason") }, item.version);
+      toast("事件已取消", "ok");
+      await loadItems();
+    }, true));
+  }
+  if (!panel.querySelector("form")) panel.appendChild(el("p", { class: "hint" }, "当前状态无可执行的收尾操作。"));
+  return panel;
+
+  function formNode(labelText, field, placeholder, buttonText, onSubmit, danger) {
+    const form = el("form", { style: "margin-bottom:10px" });
+    form.appendChild(el("label", null, labelText));
+    form.appendChild(el("input", { name: field, required: "", placeholder: placeholder || "" }));
+    form.appendChild(el("button", { class: "btn-block " + (danger ? "danger" : ""), type: "submit" }, buttonText));
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try { await onSubmit(new FormData(form)); } catch (err) { toast(err.message, "error"); }
+    });
+    return form;
+  }
+}
+
+// ---------- 台账（修订 + 来源） ----------
+function buildLedgerPanel(item) {
+  const p = item.payload;
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, "轨道修订与来源台账"));
+
+  panel.appendChild(el("h3", null, "修订序列（按提交顺序）"));
+  const revisions = (p.revisions || []).slice().reverse();
+  if (!revisions.length) {
+    panel.appendChild(el("p", { class: "hint" }, "尚无修订，当前距离与风险来自创建事件时的初始轨道数据。"));
+  } else {
+    const table = el("table");
+    table.appendChild(el("thead", null, el("tr", null,
+      el("th", null, "观测时间"), el("th", null, "距离 (m)"), el("th", null, "协方差 (m)"),
+      el("th", null, "来源"), el("th", null, "处置"))));
+    const tbody = el("tbody");
+    for (const rev of revisions) {
+      tbody.appendChild(el("tr", { class: rev.applied ? "" : "approved-row" },
+        el("td", null, rev.observed_at),
+        el("td", { class: rev.applied ? "" : "strike" }, fmtNum(rev.miss_distance_m, 2)),
+        el("td", null, fmtNum(rev.covariance_m, 2)),
+        el("td", null, rev.source),
+        el("td", null, rev.applied
+          ? el("span", { class: "badge ok" }, "已采用为当前数据")
+          : el("span", { class: "badge pending" }, "晚到旧数据 · 仅留档未覆盖")),
+      ));
+    }
+    table.appendChild(tbody);
+    panel.appendChild(table);
+  }
+
+  panel.appendChild(el("h3", null, "原始来源记录（" + (item.sources || []).length + "）"));
+  const sources = item.sources || [];
+  if (!sources.length) {
+    panel.appendChild(el("p", { class: "hint" }, "暂无来源记录。"));
+  } else {
+    const table = el("table");
+    table.appendChild(el("thead", null, el("tr", null,
+      el("th", null, "观测时间"), el("th", null, "类型"), el("th", null, "外部 ID"),
+      el("th", null, "距离 (m)"), el("th", null, "协方差 (m)"))));
+    const tbody = el("tbody");
+    for (const src of sources) {
+      const sp = src.payload || {};
+      tbody.appendChild(el("tr", null,
+        el("td", null, src.observed_at),
+        el("td", null, src.source_type),
+        el("td", null, src.external_id),
+        el("td", null, fmtNum(sp.miss_distance_m, 2)),
+        el("td", null, fmtNum(sp.covariance_m, 2)),
+      ));
+    }
+    table.appendChild(tbody);
+    panel.appendChild(table);
+  }
+  return panel;
+}
+
+// ---------- 审计链 ----------
+function buildAuditPanel(item) {
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("h2", null, "审计链"));
+  const table = el("table");
+  table.appendChild(el("thead", null, el("tr", null,
+    el("th", null, "时间"), el("th", null, "事件"), el("th", null, "操作人"), el("th", null, "详情"))));
+  const tbody = el("tbody");
+  for (const ev of (item.audit || []).slice().reverse()) {
+    let detail = "";
+    try { detail = JSON.stringify(ev.payload); } catch (e) { detail = ""; }
+    tbody.appendChild(el("tr", null,
+      el("td", null, ev.created_at),
+      el("td", null, el("span", { class: "badge" }, ev.event_type)),
+      el("td", null, fmt(ev.actor) + (ev.role ? " / " + ev.role : "")),
+      el("td", null, el("code", null, detail.length > 220 ? detail.slice(0, 220) + "…" : detail)),
+    ));
+  }
+  table.appendChild(tbody);
+  panel.appendChild(table);
+  return panel;
+}
+
+// ---------- 创建事件 ----------
+document.getElementById("createForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  saveIdentity();
+  const data = new FormData(ev.target);
+  const operators = String(data.get("operating_organizations") || "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  try {
+    const created = await api("POST", "/api/items", {
+      primary_object_id: data.get("primary_object_id"),
+      secondary_object_id: data.get("secondary_object_id"),
+      tca: localToIso(data.get("tca")),
+      miss_distance_m: Number(data.get("miss_distance_m")),
+      covariance_m: Number(data.get("covariance_m")),
+      fuel_budget_m_s: Number(data.get("fuel_budget_m_s")),
+      track_age_hours: Number(data.get("track_age_hours")),
+      operating_organizations: operators,
+    });
+    toast("事件 #" + created.id + " 已创建", "ok");
+    ev.target.reset();
+    await loadItems();
+    selectEvent(created.id);
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+document.getElementById("refreshBtn").addEventListener("click", () => loadItems().catch((e) => toast(e.message, "error")));
+document.getElementById("userId").addEventListener("change", () => { saveIdentity(); if (state.detail) renderDetail(); });
+document.getElementById("role").addEventListener("change", () => { saveIdentity(); if (state.detail) renderDetail(); });
+
+// ---------- 启动 ----------
+loadIdentity();
+loadItems().catch((e) => toast(e.message, "error"));
+setInterval(() => { if (!document.querySelector("form:hover")) loadItems(true).catch(() => {}); }, 10000);
+</script>
+</body>
+</html>

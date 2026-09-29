@@ -73,8 +73,10 @@ def normalize_create(payload):
     fuel_budget = number(payload, "fuel_budget_m_s", 0)
     track_age = number(payload, "track_age_hours", 0)
     operators = payload.get("operating_organizations", [])
-    if not isinstance(operators, list) or any(not isinstance(item, str) or not item.strip() for item in operators):
-        raise DomainError("invalid_operators", "运营方必须是字符串列表")
+    if not isinstance(operators, list) or not operators or any(
+        not isinstance(item, str) or not item.strip() for item in operators
+    ):
+        raise DomainError("invalid_operators", "至少需要一个运营方，且必须是字符串列表")
     stable_key = "%s|%s|%s" % tuple(sorted([primary, secondary]) + [tca])
     return {
         "primary_object_id": primary,
